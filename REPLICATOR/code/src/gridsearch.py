@@ -6,11 +6,6 @@ Alphavirus Five Prime UTR Project
 gridsearch.py: perform grid search on the model parameters 
 Boyan Li
 
-Usage:
-    gridsearch.py <model>
-
-Options:
-    -h --help                               show this screen.
 """
 
 from itertools import product
@@ -52,18 +47,109 @@ def ParamGridSearch(model_name):
         for x in param_comb:
             param_comb_filtered.append({"hidden_size_fc": x, "fc_layers": len(x)})
 
-    elif model_name == "deepcnnlstm":
-        pooling_out_sizes = [5, 10, 15, 20]
+    elif model_name == "deepcnnlstm_in":
+        pooling_out_sizes = [5, 10, 15]
         n_lstm_layers = [1, 2, 3]
-        param_comb = product(pooling_out_sizes, n_lstm_layers)
+        n_filters_list = [[64, 64], [128, 128], [128, 128,128]]  
+        filter_sizes_list = [[3, 5], [5, 9], [5, 9, 11]]     
+        hidden_size_lstm_list = [64, 128]
+        hidden_size_fc_list = [[32], [64], [128, 64]]
+        learning_rates = [2e-4, 3e-4]
+        batch_sizes = [32, 64]
+        fc_dropout_rate = [[0],[0.1], [0.2], [0.3]]
+        conv_dropout_rate = [[0.1,0.2,0.2],[0.2,0.2,0.2], [0.1,0.2,0.3]]
+        weight_decays = [0.0, 1e-5]
+
+        param_comb = product(
+            pooling_out_sizes,
+            n_lstm_layers,
+            n_filters_list,
+            filter_sizes_list,
+            hidden_size_lstm_list,
+            hidden_size_fc_list,
+            learning_rates,
+            batch_sizes,
+            fc_dropout_rate,
+            conv_dropout_rate,
+            weight_decays,
+        )
+
         param_comb_filtered = []
-        for x, y in param_comb:
-            param_comb_filtered.append(
-                {"pooling_out_size": x, "n_lstm_layers": y}
-            )
+        for (
+            pooling_out_size,
+            n_lstm_layer,
+            n_filters,
+            filter_sizes,
+            hidden_size_lstm,
+            hidden_size_fc,
+            lr,
+            bs,
+            fc_dropout_rate,
+            conv_dropout_rate,
+            weight_decay,
+        ) in param_comb:
+            param_comb_filtered.append({
+                "pooling_out_size": pooling_out_size,
+                "n_lstm_layers": n_lstm_layer,
+                "n_filters": n_filters,
+                "conv_filter_sizes": filter_sizes,
+                "hidden_size_lstm": hidden_size_lstm,
+                "hidden_size_fc": hidden_size_fc,
+                "learning_rate": lr,
+                "batch_size": bs,
+                "fc_dropout_rate": fc_dropout_rate,
+                "conv_dropout_rate":conv_dropout_rate,
+                "weight_decay": weight_decay,
+            })
 
-    return param_comb_filtered
+        return param_comb_filtered
+    elif model_name == "deepcnnlstm_SFV":
+        #pooling_out_sizes = [5, 10, 15]
+        n_lstm_layers = [1, 2, 3]
+        n_filters_list = [[128, 128], [128, 128,128], [128, 128,128]] 
+        filter_sizes_list = [[5, 9], [5, 9, 11], [5, 9, 23], [5, 9, 64]]     
+        hidden_size_lstm_list = [64, 128]
+        #hidden_size_fc_list = [[32], [64], [128, 64]]
+        learning_rates = [2e-4, 3e-4]
+        batch_sizes = [32, 64]
+        fc_dropout_rate = [[0],[0.1], [0.2], [0.3]]
+        #conv_dropout_rate = [[0.1,0.2,0.2],[0.2,0.2,0.2], [0.1,0.2,0.3]]
+        weight_decays = [0.0, 1e-5]
 
+        param_comb = product(
+            n_lstm_layers,
+            n_filters_list,
+            filter_sizes_list,
+            hidden_size_lstm_list,
+            learning_rates,
+            batch_sizes,
+            fc_dropout_rate,
+            weight_decays,
+        )
+
+        param_comb_filtered = []
+        for (
+            n_lstm_layer,
+            n_filters,
+            filter_sizes,
+            hidden_size_lstm,
+            lr,
+            bs,
+            fc_dropout_rate,
+            weight_decay,
+        ) in param_comb:
+            param_comb_filtered.append({
+                "n_lstm_layers": n_lstm_layer,
+                "n_filters": n_filters,
+                "conv_filter_sizes": filter_sizes,
+                "hidden_size_lstm": hidden_size_lstm,
+                "learning_rate": lr,
+                "batch_size": bs,
+                "fc_dropout_rate": fc_dropout_rate,
+                "weight_decay": weight_decay,
+            })
+
+        return param_comb_filtered
 
 if __name__ == "__main__":
     args = docopt(__doc__)
