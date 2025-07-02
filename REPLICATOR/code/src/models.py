@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Alphavirus Five Prime UTR Project
-sequencing_analysis_utils.py: process the raw data of NGS
-Boyan Li
-
-Usage:
-    check_reproducibility.py --virus-name=<str> --date=<str> --assemble=<bool> --calculate-abundance=<bool>
-
-Options:
-    -h --help                               show this screen.
-    --virus-name=<str>                      the name of virus.
-    --date=<str>                            date of the experiment.  """
-
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -21,7 +5,6 @@ import torch.utils.data as Data
 import numpy as np
 from data_storage import ngs_path_collection, virus_seqs
 import matplotlib.pyplot as plt
-from utils import save_fig
 from torch.nn.utils.rnn import pad_sequence, pad_packed_sequence, pack_padded_sequence
 import itertools
 
@@ -94,7 +77,6 @@ class DeepCNN(nn.Module):
         self.conv2 = self.convs[1]
         self.conv3 = self.convs[2]
         self.conv4 = self.convs[3]
-        # self.conv5 = self.convs[4]
         self.pools = nn.ModuleList(
             [
                 nn.MaxPool1d(kernel_size=config.pooling_filter_sizes[i])
@@ -121,11 +103,11 @@ class DeepCNN(nn.Module):
         x_fwd = F.one_hot(x).type(torch.float).transpose(1, 2)
         if config.strand_specific:
             x_A = x == 0
-            x_T = x == 1
+            x_U = x == 1
             x_C = x == 2
             x_G = x == 3
             x[x_A] = 1
-            x[x_T] = 0
+            x[x_U] = 0
             x[x_C] = 3
             x[x_G] = 2
             x_rev = F.one_hot(x).type(torch.float).transpose(1, 2)
@@ -263,40 +245,58 @@ class BERT(nn.Module):
         pos = torch.arange(seqlen, dtype=torch.long).to(src.device)
         pos = pos.unsqueeze(0).expand_as(src)
         x = self.pos_embed(pos) + self.tok_embed(src)
-
-        # Masking
         padding_mask = src.eq(self.config.pad_idx)
 
         # Encoder
         encoder_output = self.transformer_encoder(x, src_key_padding_mask=padding_mask)
 
-        # Regression
-        h_pooled = nn.Tanh()(self.fc2(encoder_output[:, 0]))
-        out = self.regression(h_pooled)[:, 0]
-        loss = None
-        if y is not None:
-            loss = nn.MSELoss()(out, y.type(torch.float))
-
-        # classification
+        # MLM 任务模式
         if masked_pos is not None:
             masked_pos = masked_pos[:, :, None].expand(-1, -1, encoder_output.size(-1))
             h_masked = torch.gather(encoder_output, 1, masked_pos)
             h_masked = self.norm(F.relu(self.fc(h_masked)))
-            out = self.decoder(h_masked)
+            pred_tokens = self.decoder(h_masked)
+
+            loss = None
             if masked_toks is not None:
                 loss_func = nn.CrossEntropyLoss(ignore_index=self.config.pad_idx)
-                loss = loss_func(out.permute(0, 2, 1), masked_toks)
+                loss = loss_func(pred_tokens.permute(0, 2, 1), masked_toks)
+
+            return pred_tokens, loss
+
+        # 监督回归任务模式
+        h_pooled = nn.Tanh()(self.fc2(encoder_output[:, 0]))
+        out = self.regression(h_pooled)[:, 0]
+
+        loss = None
+        if y is not None:
+            loss = nn.MSELoss()(out, y.float())
 
         return out, loss
 
 
-class CNNBert(nn.Module):
+
+class LinearRegression(nn.Module):
+    def __init__(self, config):
+        super(LinearRegression, self).__init__()
+        self.linear = nn.Linear(config.input_size, 1)
+
+    def forward(self, x, y):
+        x = x.float()  
+        out = self.linear(x)[:, 0]
+        loss = None
+        if y is not None:
+            loss = nn.MSELoss()(out, y.float())
+        return out, loss
+    
+
+class CNNLR(nn.Module):
     def __init__(self, config, show_param_number=False):
-        super(CNNBertBiLSTM, self).__init__()
+        super(CNNLR, self).__init__()
         self.config = config
         conv_input_sizes = [config.embed_size] + config.n_filters[:-1]
-        if config.strand_specific:
-            conv_input_sizes[config.concat_layer + 1] *= 2
+#        if config.strand_specific:
+#            conv_input_sizes[config.concat_layer + 1] *= 2
         self.convs = nn.ModuleList(
             [
                 nn.Sequential(
@@ -309,44 +309,29 @@ class CNNBert(nn.Module):
                     nn.ReLU(),
                     nn.Dropout(p=config.conv_dropout_rate[i]),
                 )
-                for i in range(config.n_conv_layers)
+                for i in range(len(config.n_filters))
             ]
         )
         # Retrieve
         self.conv1 = self.convs[0]
         self.conv2 = self.convs[1]
-        self.conv3 = self.convs[2]
-        self.pools = nn.ModuleList(
-            [
-                nn.MaxPool1d(kernel_size=config.pooling_filter_sizes[i])
-                for i in range(len(config.pooling_filter_sizes))
-            ]
-        )
-        fc_input_sizes = [config.n_filters[-1]] + config.hidden_sizes[:-1]
-        self.fc = nn.ModuleList(
-            [
-                nn.Linear(fc_input_sizes[i], config.hidden_sizes[i])
-                for i in range(len(config.hidden_sizes))
-            ]
-        )
-        self.reg = nn.Linear(config.hidden_sizes[-1], 1)
-        if show_param_number:
-            print(
-                "Number of parameters: {}".format(
-                    sum(p.numel() for p in self.parameters())
-                )
+        self.reg = nn.Linear(config.reg_hidden_size, 1)
+        print(
+            "Number of parameters: {}".format(
+                sum(p.numel() for p in self.parameters())
             )
+        ) 
 
     def forward(self, x, y=None):
         config = self.config
         x_fwd = F.one_hot(x).type(torch.float).transpose(1, 2)
         if config.strand_specific:
             x_A = x == 0
-            x_T = x == 1
+            x_U = x == 1
             x_C = x == 2
             x_G = x == 3
             x[x_A] = 1
-            x[x_T] = 0
+            x[x_U] = 0
             x[x_C] = 3
             x[x_G] = 2
             x_rev = F.one_hot(x).type(torch.float).transpose(1, 2)
@@ -357,34 +342,25 @@ class CNNBert(nn.Module):
             x_fwd = conv(x_fwd)
             if config.strand_specific and not concat:
                 x_rev = conv(x_rev)
-            if layer in config.pooling_locations:
-                x_fwd = self.pools[pooling_count](x_fwd)
-                if config.strand_specific and not concat:
-                    x_rev = self.pools[pooling_count](x_rev)
-                pooling_count += 1
             if config.strand_specific and layer == config.concat_layer:
                 x_fwd = torch.cat([x_fwd, x_rev], dim=1)
                 concat = True
             layer += 1
-        cnn_output = F.max_pool1d(x_fwd, int(x_fwd.size(2)))
-        cnn_output = cnn_output.squeeze(2)
-        x = cnn_output
-        for i, fc in enumerate(self.fc):
-            x = F.dropout(F.relu(fc(x)), p=config.fc_dropout_rate[i])
+        x = x_fwd
+        x = x.permute((0, 2, 1)).reshape((x.shape[0], -1, 1))
+        x = x.squeeze(2)
+        x_second_order = []
+        for i in range(25):
+            for j in range(config.n_filters[-1]):
+                x_second_order.append(
+                    x[:, i * config.n_filters[-1] + j].reshape((-1, 1))
+                    * x[:, (i + 1) * config.n_filters[-1] :]
+                )
+        x_second_order = torch.cat(x_second_order, dim=1)
+        x = torch.cat(
+            [torch.ones((x.shape[0], 1), device=x.device), x, x_second_order], dim=1
+        )
         out = self.reg(x)[:, 0]
-        loss = None
-        if y is not None:
-            loss = nn.MSELoss()(out, y.type(torch.float))
-        return out, loss
-
-
-class LinearRegression(nn.Module):
-    def __init__(self, config):
-        super(LinearRegression, self).__init__()
-        self.linear = nn.Linear(config.input_size, 1)
-
-    def forward(self, x, y):
-        out = self.linear(x)[:, 0]
         loss = None
         if y is not None:
             loss = nn.MSELoss()(out, y.type(torch.float))
