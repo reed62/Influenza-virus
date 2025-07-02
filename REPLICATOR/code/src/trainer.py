@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class TrainerConfig:
-    max_epochs = 50
+    max_epochs = 30
     batch_size = 64
     learning_rate = 3e-4
     num_workers = 1
@@ -55,20 +55,33 @@ class Trainer:
                 else enumerate(loader)
             )
             for it, batch in pbar:
-                batch = [item.to(self.device) for item in batch]
-                with torch.set_grad_enabled(is_train):
-                    out, loss = model(*batch)
+                try:
+                    batch = [item.to(self.device) for item in batch]
+
+                    with torch.set_grad_enabled(is_train):
+                        out, loss = model(*batch)
+                    if torch.isnan(loss).any():
+                        print(f"❌ NaN in loss at iter {it}. Skipping.")
+                        continue
+
                     loss = loss.mean()
                     losses.append(loss.item())
-                if is_train:
-                    model.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    pbar.set_description(
-                        f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}."
-                    )
-            test_loss = None
+
+                    if is_train:
+                        model.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                        pbar.set_description(f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}.")
+
+                except Exception as e:
+                    print(f"❌ Error during forward/backward pass at iter {it}: {e}")
+                    print(f"    Batch shapes: {[b.shape for b in batch]}")
+                    continue
+
             if not is_train:
+                if len(losses) == 0:
+                    print("❌ No valid losses collected during evaluation!")
+                    return float('nan')
                 test_loss = np.mean(losses)
                 print("Test loss: %.5f" % (test_loss))
                 return test_loss
@@ -80,6 +93,7 @@ class Trainer:
             run_epoch("train")
             if self.test_set is not None:
                 test_loss = run_epoch("test")
+                #scheduler.step(test_loss)
                 if config.early_stop:
                     if test_loss > last_loss:
                         trigger_times += 1
@@ -105,9 +119,19 @@ class Trainer:
                     loss = loss.mean()
                     losses.append(loss.item())
                 elif method == "pearsonr":
-                    out = out.cpu()
-                    y_true = batch[1].cpu()
-                    losses.append(pearsonr(out, y_true)[0])
+                    all_out = []
+                    all_y_true = []
+                    for it, batch in enumerate(loader):
+                        batch = [item.to(self.device) for item in batch]
+                        with torch.no_grad():
+                            out, _ = self.model(*batch)
+                        all_out.append(out.cpu().numpy())
+                        all_y_true.append(batch[1].cpu().numpy())
+                    all_out = np.concatenate(all_out).flatten()
+                    all_y_true = np.concatenate(all_y_true).flatten()
+                    r, _ = pearsonr(all_out, all_y_true)
+                    return r
+
                 elif method == "r2":
                     out = out.cpu()
                     y_true = batch[1].cpu()
