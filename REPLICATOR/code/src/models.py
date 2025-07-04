@@ -3,7 +3,6 @@ from torch import nn
 import torch.nn.functional as F
 import torch.utils.data as Data
 import numpy as np
-from data_storage import ngs_path_collection, virus_seqs
 import matplotlib.pyplot as plt
 from torch.nn.utils.rnn import pad_sequence, pad_packed_sequence, pack_padded_sequence
 import itertools
