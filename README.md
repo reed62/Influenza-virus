@@ -14,7 +14,7 @@ MAC OS, Linux or Windows.
 Python 3.9.19  
 Tensorflow 2.16.1 + keras 3.3.3  
 ## Ngs_analysis
-'''
+```
 python ngs_analysis.py process \
   --virus-name <str> \
   --type <str> \
@@ -24,17 +24,17 @@ python ngs_analysis.py process \
   --upstream <str> \
   --downstream <str> \
   --wt <str>
-'''
-'''
+```
+```
 python ngs_analysis.py score \
   --dna dna_results.csv \
   --rna rna_results.csv \
   --output merged_score.csv \
   --split \
   --test-size <float>
-'''
+```
 ## Train model
-'''
+```
 python train.py <model> train  
   --virus-name=<str> 
   --date=<str> 
@@ -46,7 +46,7 @@ python train.py <model> train
   [--strand-specific] 
   [--batch=<int>]
   [--learning-rate=<float>]
-'''
+```
 ## Interpretation
   REPLICATOR/code/deepcnn_interpretation.ipynb  
   REPLICATOR/code/epistasis.ipynb  
