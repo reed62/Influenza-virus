@@ -8,7 +8,7 @@ from Bio.Seq import Seq
 from Levenshtein import distance as levenshtein_distance
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit, ShuffleSplit
 from pathlib import Path
 import subprocess
 
@@ -28,6 +28,9 @@ python ngs_analysis.py score \
   --dna dna_results.csv \
   --rna rna_results.csv \
   --output merged_score.csv \
+  --clean \
+  --dna-threshhold \
+  --rna-threshhold \
   --split \
   --test-size 0.1
 """
@@ -61,33 +64,32 @@ def process_fastq_file(fastq_file, original_sequence1, original_sequence2):
                 sequence = line
                 match_original1 = re.search(re.escape(original_sequence1), sequence, re.IGNORECASE)
                 match_original2 = re.search(re.escape(original_sequence2), sequence, re.IGNORECASE)
-                if match_original1 and match_original2:
+                #if match_original1 and match_original2:
+                if match_original1:
                     match_start1 = match_original1.start()
                     match_end1 = match_original1.end()
-                    match_start2 = match_original2.start()
-                    match_end2 = match_original2.end()
+                    """match_start2 = match_original2.start()
+                    match_end2 = match_original2.end()"""
                     extracted = sequence[max(0, match_start1 - 26):match_start1]
-                    extracted_sequence = sequence[match_end2:match_start1-26]
-                    yield (sequence_id, sequence, extracted, extracted_sequence, False)
+                    yield (sequence_id, sequence, extracted, False)
                 else:
                     seq_obj = Seq(sequence)
                     reverse_complement_seq = str(seq_obj.reverse_complement())
                     match_rc1 = re.search(re.escape(original_sequence1), reverse_complement_seq, re.IGNORECASE)
                     match_rc2 = re.search(re.escape(original_sequence2), reverse_complement_seq, re.IGNORECASE)
-                    if match_rc1 and match_rc2:
+                    if match_rc1:
                         match_start1 = match_rc1.start()
                         match_end1 = match_rc1.end()
-                        match_start2 = match_rc2.start()
-                        match_end2 = match_rc2.end()
+                        """match_start2 = match_rc2.start()
+                        match_end2 = match_rc2.end()"""
                         extracted = reverse_complement_seq[max(0, match_start1 - 26):match_start1]
-                        extracted_sequence = reverse_complement_seq[match_end2:match_start1-26]
-                        yield (sequence_id, reverse_complement_seq, extracted, extracted_sequence, True)
+                        yield (sequence_id, reverse_complement_seq, extracted, True)
 
 def analyze_fastq(fastq_file, original_sequence1, original_sequence2, reference_sequence, output_csv, seq_type):
     total_counts = 0
     sequence_counts = {}
 
-    for seq_id, seq, extracted, extracted_sequence, is_rc in process_fastq_file(fastq_file, original_sequence1, original_sequence2):
+    for seq_id, seq, extracted, is_rc in process_fastq_file(fastq_file, original_sequence1, original_sequence2):
         sequence_counts[extracted] = sequence_counts.get(extracted, 0) + 1
         total_counts += 1
 
@@ -130,8 +132,17 @@ def stratified_split(freq_csv, output_dir, test_size=0.05):
     distance_bins = np.append(distance_bins, np.inf)
     df['distance_cat'] = pd.cut(df.distance, bins=distance_bins, labels=list(range(1, len(distance_bins))), right=False)
 
-    split = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
-    for train_idx, test_idx in split.split(df, df["distance_cat"]):
+    value_counts = df['distance_cat'].value_counts()
+    if (value_counts >= 2).all():
+        print("Using StratifiedShuffleSplit")
+        splitter = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
+        split_gen = splitter.split(df, df['distance_cat'])
+    else:
+        print("Using standard ShuffleSplit (no stratification due to small class sizes)")
+        splitter = ShuffleSplit(n_splits=1, test_size=test_size, random_state=42)
+        split_gen = splitter.split(df)
+
+    for train_idx, test_idx in split_gen:
         train_df = df.loc[train_idx].reset_index(drop=True)
         test_df = df.loc[test_idx].reset_index(drop=True)
 
@@ -141,6 +152,15 @@ def stratified_split(freq_csv, output_dir, test_size=0.05):
 
     print(f"Train/Test split done, train size: {len(train_df)}, test size: {len(test_df)}")
 
+def clean_sequences(input_csv,output_csv,dna_thresh,rna_thresh):
+    df = pd.read_csv(input_csv)
+    df = df[~df['seq'].str.contains('N')]
+    df = df[df['seq'].str.startswith('U')]
+    df = df[~((df['dna_counts'] < dna_thresh) | (df['rna_counts'] < rna_thresh))]
+    output_csv = input_csv.replace(".csv", "_filter.csv")
+    df.to_csv(output_csv, index=False)
+    print(f"Cleaned data saved to {output_csv}")
+
 def cmd_process(args):
     merged_fastq = f"../../data/original/{args.virus_name}_{args.type}.fastq"
     output_csv = f"../../data/original/{args.virus_name}_{args.type}.csv"
@@ -149,7 +169,14 @@ def cmd_process(args):
 
 def cmd_score(args):
     merge_and_score(args.dna, args.rna, args.output)
-    if args.split:
+    if args.clean:
+        output=args.output.replace(".csv", "_filter.csv")
+        if args.dna_threshhold is None or args.rna_threshhold is None:
+            raise ValueError("When using --clean, both --dna-threshholds and --rna-threshholds must be provided.")
+        clean_sequences(args.output,output,args.dna_threshhold, args.rna_threshhold)
+        if args.split:
+            stratified_split(output, "../../data/original/", args.test_size)
+    else:
         stratified_split(args.output, "../../data/original/", args.test_size)
 
 def main():
@@ -172,6 +199,9 @@ def main():
     parser_score.add_argument("--rna", type=str, required=True)
     parser_score.add_argument("--output", type=str, required=True)
     parser_score.add_argument("--split", action="store_true")
+    parser_score.add_argument("--clean", action="store_true")
+    parser_score.add_argument("--dna-threshhold", type=int, required=False)
+    parser_score.add_argument("--rna-threshhold", type=int, required=False)
     parser_score.add_argument("--test-size", type=float, default=0.05)
     parser_score.set_defaults(func=cmd_score)
 
