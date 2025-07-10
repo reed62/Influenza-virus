@@ -30,6 +30,9 @@ python ngs_analysis.py score \
   --dna dna_results.csv \
   --rna rna_results.csv \
   --output merged_score.csv \
+  --clean \
+  --dna-threshhold <int>
+  --rna-threshhold <int>
   --split \
   --test-size <float>
 ```
